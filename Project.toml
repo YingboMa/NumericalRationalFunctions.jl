@@ -3,6 +3,11 @@ uuid = "b4bc94e4-3819-49ee-9f05-d01af7fe29d1"
 authors = ["Yingbo Ma <mayingbo5@gmail.com> and contributors"]
 version = "0.1.0"
 
+[deps]
+DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+
 [compat]
 julia = "1"
 

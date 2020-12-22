@@ -1,5 +1,9 @@
 module NumericalRationalFunctions
 
-# Write your package code here.
+using DocStringExtensions
+
+include("aaa.jl")
+
+export aaa
 
 end
