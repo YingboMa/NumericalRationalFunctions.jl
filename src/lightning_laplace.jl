@@ -20,9 +20,9 @@ function process_domain(
             end
         else
             if P == :L
-                w = [2, 2+1im, 1+1im, 1+2im, 2im, 0]
+                w = [2.0, 2+1im, 1+1im, 1+2im, 2im, 0.0]
             elseif P == :circleL
-                P = [2, [2+1im, -1], 1+2im, 2im, 0]
+                P = complex.([2, [2+1im, -1], 1+2im, 2im, 0.0])
             elseif P == :pent
                 w = @. 0.7*exp(pi*2im*(1:5)/5)
             elseif P == :snow
@@ -34,10 +34,11 @@ function process_domain(
             end
         end
         !(P isa AbstractArray) && (P = w)
+        P = Vector{Any}(P)
         if randomcirc
             for k = 1:length(P)
                 r = 0.6/rand()
-                P[k] = [P[k] (randn(Bool) ? r : -r)]
+                P[k] = [P[k]; (rand(Bool) ? r : -r)]
             end
         end
     end
@@ -66,7 +67,7 @@ function process_domain(
                           # parametrization of arc
                           t -> c - r*exp(im*(pi/2+t/r-theta))*(b-a)/ab
                       end)
-                push!(ww, pt[k].(range(0,stop=dw[k],length=50)))
+                append!(ww, pt[k].(range(0,stop=dw[k],length=50)))
             end
         else
             error("general boundary arcs not yet implemented")
@@ -285,13 +286,13 @@ function laplace(
         end
         append!(J, J); append!(J, J)
         N = size(A,2)                                    # no. of cols = 2n+1+2Np
-        Kj = zeros(M)
+        Kj = zeros(Int, M)
         for j = 1:M
             dd = @. abs(Z[j]-w)
             Kj[j] = findfirst(isequal(minimum(dd)), dd)                   # nearest corner to Zj
         end
         if rel                                            # weights to measure error
-            wt = abs(Z-w[Kj])/scl
+            wt = @. abs(Z-w[Kj])/scl
         else
             wt = ones(M)
         end
@@ -362,19 +363,3 @@ function fzeval(Z,wc,cc,H,pol,d,arnoldi,scl,n)
     fZ = @. fZZ[2:end] - im*imag(fZZ[1])
     return Z isa Number ? fZ[1] : reshape(fZ, size(Z))
 end
-
-
-#=
-u, err, f, Z, Zplot, A, inpoly = NumericalRationalFunctions.laplace(:iso, tol=1e-10, boundary=z->log(abs(z)));
-sx = sy = range(-1, stop=1, length=200)
-p = contour(sx, sy, (x, y)->begin
-    z = x + im*y
-    inpoly(z) == 1 ? u(z) : NaN
-end, levels=30, c=:viridis, aspect_ratio=1)
-nw = length(Zplot)
-for k in 1:nw
-    kn = mod(k, nw)+1
-    plot!(p, [Zplot[k], Zplot[kn]], color=:black, lab=false, linewidth=2)
-end
-p
-=#
