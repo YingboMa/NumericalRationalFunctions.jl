@@ -66,7 +66,7 @@ function process_domain(
                           # parametrization of arc
                           t -> c - r*exp(im*(pi/2+t/r-theta))*(b-a)/ab
                       end)
-                ww = [ww; pt[k].(range(0,stop=dw[k],length=50))];
+                push!(ww, pt[k].(range(0,stop=dw[k],length=50)))
             end
         else
             error("general boundary arcs not yet implemented")
@@ -136,7 +136,7 @@ function laplace(
                  rel = false,
                  aaa = true,
                  boundary = nothing,
-                 arnoldi = false,
+                 arnoldi = true,
                 )
     steps && (plots = true)
     g, w, ww, pt, dw, tol, rel = process_domain(P; tol, rel, boundary)
@@ -148,7 +148,7 @@ function laplace(
     wi = extrema(imag(ww))
     # for scale- and transl-invariance
     wc = mean(@. wr + wi * im)
-    scl = max((wr[2] - wr[1]), wi[2] - wi[1])
+    scl = max(wr[2] - wr[1], wi[2] - wi[1])
     # sets which corners get more poles
     q = 0.5
     slow && (q = 0.0)
@@ -157,7 +157,8 @@ function laplace(
         zs -> map(z -> inpolygon((real(z), imag(z)), polygon), zs)            # complex variant of "inpolygon"
     end
 
-    outward = similar(ww, complex(float(eltype(ww))))
+    TT = complex(float(eltype(ww)))
+    outward = similar(ww, TT)
     for k = 1:nw
         forward = pt[k](0.01*dw[k]) - w[k]            # small step toward next corner
         j = mod(k-2,nw)+1
@@ -167,23 +168,27 @@ function laplace(
     end
     # TODO: plot
 
-    Nvec = []
-    errvec = []
+    Nvec = Int[]
+    errvec = real(TT)[]
     errk = ones(nw)
     nkv = zeros(Int, nw)
     maxstepno = 30
     err0 = Inf
 
     local f, u, Z, Zplot, A
+    Z = TT[]            # col vector of sample points on boundary
+    G = TT[]            # col vector of boundary values at these points
+    T = Vector{TT}[]    # col vector of unit tangent vectors at these points
+    pol = TT[]          # row vector of poles of the rational approximation
+    J = Int[]           # row vector of indices of which corner each pole belongs to
+    d = real(TT)[]      # row vector of distances from poles to their corners
+    tt = map(_->real(TT)[], 1:nw)  # cell array of distances of sample points along each side
     for stepno = 1:maxstepno
+        empty!(Z); empty!(G); empty!(T); empty!(pol); empty!(J); empty!(d)
+        for t in tt
+            empty!(t)
+        end
         # Fix poles and sample pts on bndry.  Side k means side from corner k to k+1.
-        Z = ComplexF64[];           # col vector of sample points on boundary
-        G = ComplexF64[];           # col vector of boundary values at these points
-        T = [];           # col vector of unit tangent vectors at these points
-        pol = [];         # row vector of poles of the rational approximation
-        J = [];           # row vector of indices of which corner each pole belongs to
-        d = [];           # row vector of distances from poles to their corners
-        tt = map(_->[], 1:nw)  # cell array of distances of sample points along each side
         for k = 1:nw
             nk = nkv[k]                                  # no. of poles at this corner
             sk = @. sqrt(1:nk) - $sqrt(nk)
@@ -195,18 +200,17 @@ function laplace(
                 dk = dk[1:ii-2]
                 polk = polk[1:ii-2]
             end
-            pol = [pol; polk]; d = [d; dk]
-            if isempty(J)
-                J = k*ones(1, length(dk))
-            else
-                J = [J k*ones(1,length(dk))]
+            append!(pol, polk); append!(d, dk)
+            for _ in eachindex(dk)
+                push!(J, k)
             end
             dvec = [(1/3)*dk; (2/3)*dk; dk]                # finer pts for bndry sampling
             clustered = dvec[dvec.<dw[k]] # clustered pts near corner
             additional = range(0,stop=dw[k],length=max(30,nk))  # additional pts along side
-            tt[k] = [tt[k]; clustered; additional]
+            append!(tt[k], clustered)
+            append!(tt[k], additional)
             j = mod(k-2,nw)+1                            # index of last corner
-            tt[j] = [tt[j]; dw[j].-dvec[dvec.<dw[j]]]       # likewise in other direction
+            append!(tt[j], dw[j].-dvec[dvec.<dw[j]])       # likewise in other direction
         end
         for k = 1:nw
             sort!(tt[k])
@@ -215,9 +219,11 @@ function laplace(
             append!(Z, pktk)                             # sample pts on side k
             append!(G, g[k].(pktk))                        # boundary data at these pts
             h = 1e-4                                     # 4-pt trapezoidal rule
-            T = [T; @. (pk.(tk.+h)-im*pk.(tk.+im*h) - pk(tk-h)+im*pk(tk-im*h))/(4*h)]    # unnormalized tangent vectors
+            push!(T, @. (pk.(tk.+h)-im*pk.(tk.+im*h) - pk(tk-h)+im*pk(tk-im*h))/(4*h))    # unnormalized tangent vectors
         end
-        T = T./abs.(T);                                  # normalize tangent vectors
+        for t in T
+            @. t = t/abs(t)                                  # normalize tangent vectors
+        end
         II = isnan.(G);                                   # Neumann indices
         if any(II)
             arnoldi = false
@@ -228,17 +234,18 @@ function laplace(
         Np = length(pol)
 
         M = size(Z, 1)
-        H = zeros(n+1, n);                                # Arnoldi Hessenberg matrix
+        H = zeros(TT, n+1, n);                                # Arnoldi Hessenberg matrix
         if arnoldi
-            Q = ones(M);                                # cols of Q have norm sqrt(M)
-            for k = 1:n                                   # Arnoldi process
-                v = @. (Z-wc) * Q[:, k]                        # (not yet implemented if
+            Q = ones(TT, M, n+1) # cols of Q have norm sqrt(M)
+            v = zeros(TT, M)
+            @views for k = 1:n                                   # Arnoldi process
+                @. v = (Z - wc) * Q[:, k]                        # (not yet implemented if
                 for j = 1:k                                #  are Neumann BCs)
                     H[j, k] = Q[:, j]'v/M
-                    v = v - H[j, k]*Q[:, j]
+                    @. v = v - H[j, k]*Q[:, j]
                 end
                 H[k+1, k] = norm(v)/sqrt(M)
-                Q = [Q v/H(k+1, k)]
+                @. Q[:, k+1] = v/H[k+1, k]
             end
         else                                             # no-Arnoldi option
             Q = @. ((Z-wc)/scl)^$Transpose(0:n)                      # (for educational purposes)
@@ -263,11 +270,15 @@ function laplace(
             if any(II)                                     # Neumann BCs, if any
                 JJ = 2*n+1 .+ (1:2*Np);                      # column indices for poles
                 A[II,1] = 0;
-                tmp = -(d./(Z[II]-pol).^2).*T[II]
+                tmp = @. -(d/(Z[II]-pol)^2)*T[II]
                 A[II,JJ] = [imag(tmp) -real(tmp)]
             end
         end
-        J = [zeros(1,2*n+1) J J]                         # corner for each col
+        # corner for each col
+        for _ in 1:2n+1
+            push!(J, 0)
+        end
+        append!(J, J); append!(J, J)
         N = size(A,2)                                    # no. of cols = 2n+1+2Np
         Kj = zeros(M)
         for j = 1:M
@@ -284,9 +295,13 @@ function laplace(
         c = (W*A)\(W*Gn)                                 # least-squares solution
         cc = [c[1]; c[2:n+1]-im*c[n+2:2*n+1]              # complex coeffs for f
               c[2*n+2:2*n+Np+1]-im*c[2*n+Np+2:end]]
-        f = z -> reshape(fzeval(vec(z),wc,               # vector and matrix inputs
-                                cc,H,pol,d,arnoldi,scl,n), size(z))    # to u and f both allowed
-        u = z -> real(f(z))
+        f = let wc=wc, cc=cc, H=H, pol=pol, d=d, arnoldi=arnoldi, scl=scl, n=n
+            z -> fzeval(z,wc,               # vector and matrix inputs
+                        cc,H,pol,d,arnoldi,scl,n)    # to u and f both allowed
+        end
+        u = let f=f
+            z -> real(f(z))
+        end
         for k = 1:nw
             Kk = findall(isequal(k), Kj)
             errk[k] = norm(wt[Kk] .* (A[Kk,:]*c-Gn[Kk]), Inf) # error near corner k
@@ -299,11 +314,10 @@ function laplace(
                 nkv[k] = nkv[k]+ceil(1+sqrt(nkv[k]))      # increase no. poles
             else
                 nkv[k] = max(nkv[k],ceil(stepno/2))
-                #nkv(k) = min(polmax,nkv(k)+1)
             end
         end
         # TODO: plot
-        errvec = [errvec; err]; Nvec = [Nvec; N]
+        push!(errvec, err); push!(Nvec, N)
         err < 0.5*tol && break                             # convergence success
         if err < err0                                      # save the best so far
             u0 = u; f0 = f; Z0 = Z; G0 = G; A0 = A; M0 = M;
@@ -317,4 +331,28 @@ function laplace(
         end
     end
     return f, u, Z, Zplot, A
+end
+
+function fzeval(Z,wc,cc,H,pol,d,arnoldi,scl,n)
+    !(Z isa Number) && (Z = vec(Z))
+    ZZ = [wc; Z]
+    if arnoldi
+        Q = ones(size(ZZ))
+        for k = 1:size(H,2)
+            v = (ZZ-wc).*Q[:,k]
+            for j = 1:k
+                v = v - H[j,k]*Q[:,j]
+            end
+            Q = [Q v/H[k+1,k]];
+        end
+    else
+        Q = @. ((ZZ-wc)/scl).^$Transpose(0:n);
+    end
+    if length(pol) > 0
+        fZZ = [Q (@. $Transpose(d)/(ZZ-$Transpose(pol)))]*cc
+    else
+        fZZ = Q*cc
+    end
+    fZ = @. fZZ[2:end] - im*imag(fZZ[1])
+    return Z isa Number ? fZ[1] : reshape(fZ, size(Z))
 end
