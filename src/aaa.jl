@@ -61,7 +61,7 @@ function aaa(
 
         # solve a linear least-squares problem
         Aᵐ = löwner_matrix(F, Z, I, J)
-        _, _, V = svd(Aᵐ, full=true)
+        V = svd(Aᵐ, full=true).V
         w = V[:, m] # weight vector = min singular value vector
 
         # max error at sample points
