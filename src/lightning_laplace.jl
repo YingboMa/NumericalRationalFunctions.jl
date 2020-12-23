@@ -85,7 +85,7 @@ function process_domain(
     elseif boundary isa AbstractArray
         if eltype(boundary) <: Function
             g = boundary
-        elseif eltype(boundary) <: Number     # if vector, convert to cell array of fun. handles
+        elseif eltype(boundary) <: Number     # if vector, convert to array of fun.
             for k = 1:nw
                 g[k] = let boundary = boundary[k]
                     z -> oftype(z, boundary)
@@ -96,8 +96,8 @@ function process_domain(
         end
     else
         if boundary isa Function
-            g = boundary
-        elseif boundary isa Number     # if vector, convert to cell array of fun. handles
+            g = fill(boundary, nw)
+        elseif boundary isa Number     # if vector, convert to array of fun.
             for k = 1:nw
                 g[k] = let boundary = boundary
                     z -> oftype(z, boundary)
@@ -166,7 +166,6 @@ function laplace(
         tmp = im*backward*sqrt(-forward/backward);
         outward[k] = tmp/abs(tmp);                    # outward direction from corner
     end
-    # TODO: plot
 
     Nvec = Int[]
     errvec = real(TT)[]
@@ -174,15 +173,21 @@ function laplace(
     nkv = zeros(Int, nw)
     maxstepno = 30
     err0 = Inf
+    err = real(TT)
 
-    local f, u, Z, Zplot, A
-    Z = TT[]            # col vector of sample points on boundary
-    G = TT[]            # col vector of boundary values at these points
-    T = Vector{TT}[]    # col vector of unit tangent vectors at these points
-    pol = TT[]          # row vector of poles of the rational approximation
-    J = Int[]           # row vector of indices of which corner each pole belongs to
-    d = real(TT)[]      # row vector of distances from poles to their corners
-    tt = map(_->real(TT)[], 1:nw)  # cell array of distances of sample points along each side
+    Z = TT[]            # vector of sample points on boundary
+    G = TT[]            # vector of boundary values at these points
+    T = Vector{TT}[]    # vector of unit tangent vectors at these points
+    pol = TT[]          # vector of poles of the rational approximation
+    J = Int[]           # vector of indices of which corner each pole belongs to
+    d = real(TT)[]      # vector of distances from poles to their corners
+    tt = map(_->real(TT)[], 1:nw)  # array of distances of sample points along each side
+
+    # initializations
+    cc = pol
+    A = Matrix{real(TT)}(undef, 0, 0)
+    H = Matrix{TT}(undef, 0, 0)
+    n = 0
     for stepno = 1:maxstepno
         empty!(Z); empty!(G); empty!(T); empty!(pol); empty!(J); empty!(d)
         for t in tt
@@ -295,19 +300,11 @@ function laplace(
         c = (W*A)\(W*Gn)                                 # least-squares solution
         cc = [c[1]; c[2:n+1]-im*c[n+2:2*n+1]              # complex coeffs for f
               c[2*n+2:2*n+Np+1]-im*c[2*n+Np+2:end]]
-        f = let wc=wc, cc=cc, H=H, pol=pol, d=d, arnoldi=arnoldi, scl=scl, n=n
-            z -> fzeval(z,wc,               # vector and matrix inputs
-                        cc,H,pol,d,arnoldi,scl,n)    # to u and f both allowed
-        end
-        u = let f=f
-            z -> real(f(z))
-        end
         for k = 1:nw
             Kk = findall(isequal(k), Kj)
             errk[k] = norm(wt[Kk] .* (A[Kk,:]*c-Gn[Kk]), Inf) # error near corner k
         end
         err = norm(wt.*(A*c-Gn), Inf)                     # global error
-        @show err
         polmax = 100
         for k = 1:nw
             if (errk[k] > q*err) & (nkv[k] < polmax)
@@ -316,34 +313,43 @@ function laplace(
                 nkv[k] = max(nkv[k],ceil(stepno/2))
             end
         end
-        # TODO: plot
         push!(errvec, err); push!(Nvec, N)
         err < 0.5*tol && break                             # convergence success
         if err < err0                                      # save the best so far
-            u0 = u; f0 = f; Z0 = Z; G0 = G; A0 = A; M0 = M;
-            N0 = N; err0 = err; pol0 = pol; wt0 = wt;
+            #TODO
         end
         if (N > 1200) || (stepno == maxstepno) || (Np >= polmax*nw)  # failure
+            #TODO
             #u = u0; f = f0; Z = Z0; G = G0; A = A0; M = M0;
             #N = N0; err = err0; pol = pol0; wt = wt0;
             @warn "Loosen tolerance or add corners?"
             break
         end
     end
-    return f, u, Z, Zplot, A
+    f = let wc=wc, cc=cc, H=H, pol=pol, d=d, arnoldi=arnoldi, scl=scl, n=n
+        z -> fzeval(z,wc,               # vector and matrix inputs
+                    cc,H,pol,d,arnoldi,scl,n)    # to u and f both allowed
+    end
+    u = let f=f
+        z -> real(f(z))
+    end
+    return u, err, f, Z, Zplot, A, inpolygonc
 end
 
 function fzeval(Z,wc,cc,H,pol,d,arnoldi,scl,n)
     !(Z isa Number) && (Z = vec(Z))
     ZZ = [wc; Z]
     if arnoldi
-        Q = ones(size(ZZ))
-        for k = 1:size(H,2)
-            v = (ZZ-wc).*Q[:,k]
+        M = length(ZZ)
+        TT = eltype(H)
+        Q = ones(TT, M, n+1)
+        v = zeros(TT, M)
+        @views for k = 1:size(H,2)
+            @. v = (ZZ-wc)*Q[:,k]
             for j = 1:k
-                v = v - H[j,k]*Q[:,j]
+                @. v = v - H[j,k]*Q[:,j]
             end
-            Q = [Q v/H[k+1,k]];
+            @. Q[:, k+1] = v/H[k+1, k]
         end
     else
         Q = @. ((ZZ-wc)/scl).^$Transpose(0:n);
@@ -356,3 +362,19 @@ function fzeval(Z,wc,cc,H,pol,d,arnoldi,scl,n)
     fZ = @. fZZ[2:end] - im*imag(fZZ[1])
     return Z isa Number ? fZ[1] : reshape(fZ, size(Z))
 end
+
+
+#=
+u, err, f, Z, Zplot, A, inpoly = NumericalRationalFunctions.laplace(:iso, tol=1e-10, boundary=z->log(abs(z)));
+sx = sy = range(-1, stop=1, length=200)
+p = contour(sx, sy, (x, y)->begin
+    z = x + im*y
+    inpoly(z) == 1 ? u(z) : NaN
+end, levels=30, c=:viridis, aspect_ratio=1)
+nw = length(Zplot)
+for k in 1:nw
+    kn = mod(k, nw)+1
+    plot!(p, [Zplot[k], Zplot[kn]], color=:black, lab=false, linewidth=2)
+end
+p
+=#
