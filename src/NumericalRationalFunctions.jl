@@ -5,6 +5,6 @@ using DocStringExtensions
 include("aaa.jl")
 include("lightning_laplace.jl")
 
-export aaa
+export aaa, laplace
 
 end
